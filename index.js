@@ -1,62 +1,58 @@
 const express = require('express');
-const { default: makeWASocket, useMultiFileAuthState, delay, makeCacheableSignalKeyStore } = require('@whiskeysockets/baileys');
-const pino = require('pino');
 const app = express();
-const PORT = process.env.PORT || 3000;
-
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+const { default: makeWASocket, useMultiFileAuthState, delay, makeCacheableSignalKeyStore, DisconnectReason } = require('@whiskeysockets/baileys');
+const pino = require('pino');
+const fs = require('fs');
 
 app.get('/', (req, res) => {
   res.send(`
-  <h2>PAIRING SITE</h2>
-  <form action="/pair" method="get">
-  <input type="text" name="number" placeholder="91XXXXXXXXXX ke saath number daalo" required>
-  <button type="submit">GET PAIR CODE</button>
+  <html><body style="background:#000;color:#fff;text-align:center;padding-top:50px;font-family:sans-serif">
+  <h2>PAIR BOT - FIXED</h2>
+  <form action="/pair">
+  <input name="number" placeholder="919876543210" style="padding:10px;width:250px" required><br><br>
+  <button style="padding:10px 20px;background:#00ff00">GET CODE</button>
   </form>
+  </body></html>
   `);
 });
 
 app.get('/pair', async (req, res) => {
-  let num = req.query.number;
-  if (!num) return res.send({ error: "Number do" });
-  num = num.replace(/[^0-9]/g, '');
+  let num = (req.query.number || "").replace(/[^0-9]/g, '');
+  if (!num) return res.json({ error: "number do" });
+
+  // Vercel fix - temp folder use karo
+  if (!fs.existsSync('/tmp/session')) {
+    fs.mkdirSync('/tmp/session', { recursive: true });
+  }
 
   try {
-    const { state, saveCreds } = await useMultiFileAuthState('./session');
-    
+    const { state, saveCreds } = await useMultiFileAuthState('/tmp/session');
+
     const sock = makeWASocket({
       auth: {
         creds: state.creds,
-        keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "fatal" })),
+        keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "silent" }).child({})),
       },
+      logger: pino({ level: "silent" }),
       printQRInTerminal: false,
-      logger: pino({ level: "fatal" }),
-      browser: ["Chrome (Linux)", "", ""]
+      browser: ["Ubuntu", "Chrome", "20.0.04"]
     });
 
     sock.ev.on('creds.update', saveCreds);
 
-    if (!sock.authState.creds.registered) {
-      await delay(1500);
-      let code = await sock.requestPairingCode(num);
-      code = code?.match(/.{1,4}/g)?.join("-") || code;
-      console.log("PAIR CODE:", code);
-      res.send({ code: code, message: "WhatsApp me jaake Linked Devices > Link with phone number pe ye code daalo" });
+    if (!state.creds.registered) {
+      await delay(2000);
+      const code = await sock.requestPairingCode(num);
+      const formatted = code.match(/.{1,4}/g).join("-");
+      return res.json({ pairingCode: formatted, success: true });
+    } else {
+      return res.json({ message: "Already registered" });
     }
 
-    sock.ev.on('connection.update', async (s) => {
-      const { connection, lastDisconnect } = s;
-      if (connection === 'open') {
-        console.log("CONNECTED SUCCESS");
-      }
-    });
-
-  } catch (e) {
-    console.log(e);
-    res.send({ error: e.message });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: err.message, fix: "Use /tmp/session folder" });
   }
 });
 
-app.listen(PORT, () => console.log("Server running"));
 module.exports = app;
